@@ -1,0 +1,139 @@
+---
+title: "Data Cleaning"
+author: "Takahiro Minami"
+date: "1/29/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(foreign) # for loading Stata data
+library(MASS) # for LDA
+library(class) # for kNN
+library(faraway) # for ilogit
+library(arm) # for a few base features
+library(pROC) # for ROC curve
+library(tidyverse)
+```
+
+```{r data load}
+# Household data
+df_hh <- read.csv(file.choose(), header=TRUE)
+# Family data
+df_fa <- read.csv(file.choose(), header=TRUE)
+# Person data
+df_per <- read.csv(file.choose(), header=TRUE)
+# fips code
+fips <- read.csv(file.choose(), header=TRUE)
+```
+
+
+# Adding State names
+```{r}
+# matching state name and fips code
+df_hh <- left_join(df_hh,fips,by="GESTFIPS")
+head(df_hh$GESTFIPS)
+head(df_hh$state_full)
+```
+
+# Matching hh and pp
+Household ID: H_SEQ
+Matching key in Personal Data: PH_SEQ
+
+```{r}
+# matching key between person data and household
+numperson_hh <- df_per %>% group_by(PH_SEQ) %>% summarise(n=n())
+mach_hh_per <- numperson_hh$PH_SEQ # household id we can use personal data as well
+length(mach_hh_per)  #68345
+head(mach_hh_per)
+```
+
+```{r}
+df_per_ho <- 
+  df_per %>%
+  filter(HHDREL==1)
+
+new_df_per <- 
+  df_hh %>%
+  filter(H_SEQ %in% mach_hh_per) %>%
+  inner_join(df_per_ho, by=c("H_SEQ" = "PH_SEQ"))
+
+write.csv(new_df_per, "pphhpub19.csv")
+```
+
+
+
+
+We need to decide which person in one household for the estimation.
+```{r}
+# reference person and householder
+df_per %>% 
+  group_by(HHDREL,A_FAMREL) %>%
+  summarise(n=n())
+# let's use householder (HHDREL==1)
+```
+
+Number of household having householder. -> almost the same as number of household.
+```{r}
+df_per %>%
+  filter(HHDREL==1)%>%
+  group_by(PH_SEQ)%>%
+  summarize(n=n(),
+            alone=mean(I(n==1)))
+```
+
+```{r}
+# tab table for race, gender, and native-born
+df_per %>%
+  filter(HHDREL==1)%>%
+  group_by(PRDTRACE)%>%
+  summarise(n=n(),
+            rate_male=mean(A_SEX==1)*100,
+            rate_native=mean(PRCITSHP<=3)*100)
+
+# tab table for race, gender, and native-born (simple)
+ ## FALSE=Non-white, TRUE=White
+df_per %>%
+  filter(HHDREL==1)%>%
+  group_by(I(PRDTRACE==1))%>%
+  summarise(n=n(),
+            rate_male=mean(A_SEX==1)*100,
+            rate_native=mean(PRCITSHP<=3)*100)
+```
+
+```{r}
+# place of birth (father, mother, reference person)
+df_per %>%
+  filter(HHDREL==1)%>%
+  group_by(I(PEFNTVTY==57), #father
+           I(PEMNTVTY==57))%>%  #mother
+  summarise(n=n(),
+            rate_bornUS=mean(PENATVTY==57)*100)
+```
+
+
+
+
+```{r variable check household income}
+# number of records by states
+df_hh %>% group_by(GESTFIPS) %>%
+         summarise(n=n(),
+                   ave_inc=mean(HTOTVAL,na.rm = TRUE),
+                   var_inc=var(HTOTVAL,na.rm = TRUE),
+                   max_inc=max(HTOTVAL),
+                   min_inc=min(HTOTVAL),
+                   na_inc=sum(is.na(HTOTVAL)))
+```
+
+```{r}
+ggplot(df_hh,aes(x=HTOTVAL))+
+  geom_histogram(bins=60)
+
+summary(df_hh$HTOTVAL)
+```
+
+```{r}
+head(new_df_per)
+
+```

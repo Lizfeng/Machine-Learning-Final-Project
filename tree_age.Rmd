@@ -27,6 +27,7 @@ library(class) # for kNN
 library(arm) # for a few base features
 library(partykit)
 library(reldist) # gini coefficient
+library(skimr)
 library(tidyverse)
 options(width=70, digits=4, scipen=8)
 ```
@@ -57,7 +58,7 @@ df1 <- read.csv("MLData_Clean.csv")
 ```
 
 
-#Variables and Factor
+## We need factorize variables
 ```{r}
 # clean data
 df1[sapply(df1, is.integer)] <- lapply(df1[sapply(df1, is.integer)], as.factor)
@@ -67,6 +68,13 @@ df1 <- select(df1,-c(X,state,state_full,GESTFIPS))
 head(df1)
 ```
 
+## Generate age groups. 
+
+### Group 1: 18-24
+### Group 2: 25-34
+### Group 3: 35-44
+### Group 4: 45-54
+### Group 5: 55-64
 ```{r}
 # generate age flag
 df1$AGE_flag[df1$A_AGE>=18 & df1$A_AGE<25]<-1
@@ -77,7 +85,6 @@ df1$AGE_flag[df1$A_AGE>=55 & df1$A_AGE<65]<-5
 df1$AGE_flag[is.na(df1$AGE_flag)]<-0
 ```
 
-
 ```{r}
 age_list <- vector(mode = "list", length = 5)
 for (i in 1:5) {
@@ -85,8 +92,17 @@ for (i in 1:5) {
 }
 ```
 
+## Summary of each age groups
+```{r}
+df1 %>% filter(AGE_flag>0) %>% group_by(AGE_flag) %>%
+  summarise(n=n(),
+            one_quarter_income=quantile(HTOTVAL,0.25),
+            median_income=quantile(HTOTVAL,0.5),
+            three_quarter_income=quantile(HTOTVAL,0.75))%>%
+  kable()
+```
 
-##Training and Testing Set List
+## Generate Training and Testing Set List. We assign 75 % of sample to Training.
 ```{r}
 train_length <- 5
 test_length <- 5
@@ -103,21 +119,78 @@ for (i in 1:train_length) {
 ```
 
 
-##Tree List
+## Conduct CV to set optimal alpha. We search among potential alpha from 0.01 to 0.1.
+```{r}
+# Develop function for CV (get MSE)
+
+holdout_results <- function(splits,alpha) {
+  # Fit the model to the training set
+  mod <- ctree(HTOTVAL ~ .,
+                data=analysis(splits),
+                control = ctree_control(alpha=alpha,
+                                        testtype="Bonferroni"))
+  # Get MSE based on test set
+  test <- assessment(splits)
+  mse <- 
+    mean((test$HTOTVAL - predict(mod,newdata = test))^2)
+    
+  mse
+}
+
+# function fot set potential alpha
+a <-  seq(0.01, 0.1, 0.005)
+cv_alpha <- function(df_train){
+
+cv_result <- data.frame(alpha=a)
+
+# repeat CV for each alpha
+for (i in 1:length(a)) {
+
+ ## 10 folded CV
+cv10 <- vfold_cv(data = df_train,v = 10) %>%
+  mutate(results = pmap(list(splits,a[i]),holdout_results)) %>%
+  unnest(results)
+
+cv_result$mes[i] <- mean(cv10$results)
+}
+
+# optimal alpha
+opt_alpha <- cv_result$alpha[cv_result$mes==min(cv_result$mes)]
+opt_alpha
+}
+```
+
+
+```{r}
+# CV for all age group
+set.seed(1234)
+opt_alpha <- data.frame(age_group=c(1:5))
+
+for (i in 1:train_length) {
+  
+  train <- train_list[[i]]
+  opt_alpha$alpha[i] <- cv_alpha(age_list[[i]][train, ])
+}
+
+```
+
+
+
+## Using optimal alpha, Draw Tree of each age group
 ```{r}
 tree_list <- vector(mode = "list", length = 5)
 for (i in 1:length(tree_list)) {
  train <- train_list[[i]]
  citree <- ctree(HTOTVAL ~ .,
                 data=age_list[[i]][train, ],
-                control = ctree_control(alpha=0.05,
+                control = ctree_control(alpha=opt_alpha$alpha[i],
                                         testtype="Bonferroni"))
  tree_list[[i]] <- citree
 }
 ```
 
 
-##Graph
+## Graph
 ```{r, fig.width=50, fig.height=20}
 plot(tree_list[[1]]) 
 plot(tree_list[[2]])
@@ -126,7 +199,8 @@ plot(tree_list[[4]])
 plot(tree_list[[5]])
 ```
 
-##MES and Opportunity based Gini coefficient of 5 age groups
+
+## MES and Opportunity based Gini coefficient of 5 age groups
 ```{r}
 # mse
 mse <- c()
@@ -147,3 +221,4 @@ for (i in 1:5) {
   gini_opp[i] <- gini(predict(tree_list[[i]],newdata = age_list[[i]]))
 }
 ```
+

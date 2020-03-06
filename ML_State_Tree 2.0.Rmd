@@ -68,6 +68,7 @@ df1$HTOTVAL <- as.integer(df1$HTOTVAL)/1000
 df1$A_AGE <- as.integer(df1$A_AGE)
 df1$H_TENURE <- as.factor(df1$H_TENURE)
 df1 <- dplyr::select(df1,-X) %>% filter(A_AGE>=18)%>% dplyr::select(-A_AGE)
+df1 <- select(df1,-c(A_MJOCC,H_TENURE,A_MJIND))
 head(df1)
 ```
 
@@ -171,12 +172,24 @@ for (i in 1:length(tree_list)) {
 
 
 ## Graph
-```{r, fig.width=50, fig.height=20}
-plot(tree_list[[1]]) 
-plot(tree_list[[2]])
-plot(tree_list[[3]])
-plot(tree_list[[4]])
-plot(tree_list[[5]])
+```{r, fig.width=10, fig.height=6}
+#plot(tree_list[[31]]) #KY
+#plot(tree_list[[7]]) #NY
+#plot(tree_list[[49]]) #CA
+#plot(tree_list[[45]]) #UT
+#plot(tree_list[[9]]) #PA
+#plot(tree_list[[34]]) #MS
+#plot(tree_list[[38]]) #TX
+#plot(tree_list[[29]]) #GA
+#plot(tree_list[[33]]) #AL
+#plot(tree_list[[4]]) #MA
+#plot(tree_list[[24]]) #DC
+#plot(tree_list[[12]]) #IL
+#plot(tree_list[[14]]) #WI
+#plot(tree_list[[47]]) #WA
+#plot(tree_list[[10]]) #OH
+#plot(tree_list[[8]]) #NJ
+plot(tree_list[[44]]) #AZ
 ```
 
 

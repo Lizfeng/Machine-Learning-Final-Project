@@ -1,0 +1,115 @@
+---
+title: "Tree Trial"
+author: "Takahiro Minami"
+date: "2/16/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(class) # for kNN
+library(arm) # for a few base features
+library(partykit)
+library(reldist) # gigni coefficient
+library(tidyverse)
+```
+
+
+# Basic staff to build Conditional Inference Tree
+
+## The whole US sample 
+
+```{r}
+# marged data
+df1 <- read.csv("MLData_Clean.csv")
+df1s <- select(df1,
+               "HTOTVAL","A_SEX","PRCITSHP","PRDTRACE",
+               "PENATVTY","PEFNTVTY","PEMNTVTY","PEPAR1TYP","PEPAR2TYP")
+
+# converting interger to factors
+df1s[sapply(df1s, is.integer)] <- lapply(df1s[sapply(df1s, is.integer)], 
+                                       as.factor)
+df1s[,1] <- as.integer(df1s[,1])/1000
+head(df1s)
+```
+
+```{r}
+#A_SEX: 1 = Male, 2 = Female
+#A_AGE
+#PRCITSHP: 1 = Native, born in US; 2 = Native, born in PR or US outlying area; 3 = Native, born abroad of US parent(s); 4 = Foreign born, US cit by naturalization; 5 = Foreign born, not a US citizen
+#PRDTRACE: 1 = White only, 2 = Black only, 3 = AI only, 4 = Asian only, 5 = HP only, 6 = Mixture (Clean)
+#PENATVTY: Place of Birth 1 = U.S., 2 = Outside of U.S. (Clean)
+#PEFNTVTY: Father's Place of Birth 1 = U.S., 2 = Outside of U.S. (Clean)
+#PEMNTVTY: Mother's Place of Birth 1 = U.S., 2 = Outside of U.S. (Clean)
+#PEPAR1TYP (DAD): -1 = Dead, 1 = Biological, 2 = Step, 3 = Adopted
+#PEPAR2TYP (MOM): -1 = Dead, 1 = Biological, 2 = Step, 3 = Adopted
+```
+
+```{r}
+# Baseline case
+citree <- ctree(HTOTVAL ~ .,
+                data=df1s,
+                control = ctree_control(alpha=0.05,
+                                        testtype="Bonferroni"))
+```
+
+```{r, fig.width=30, fig.height=20}
+# Plot
+plot(citree)
+```
+
+# MES and Opportunity based Gini coefficient
+```{r}
+# mse
+mes <- mean((df1s$HTOTVAL - predict(citree,newdata = df1s))^2)
+
+# opportunity based gini coefficient
+gini_opp <- gini(predict(citree,newdata = df1s))
+```
+
+
+# Cross validation for deciding alpha
+```{r}
+# Develop function for CV (get MSE)
+
+holdout_results <- function(splits,alpha) {
+  # Fit the model to the training set
+  mod <- ctree(HTOTVAL ~ .,
+                data=analysis(splits),
+                control = ctree_control(alpha=alpha,
+                                        testtype="Bonferroni"))
+  # Get MSE based on test set
+  test <- assessment(splits)
+  mse <- 
+    mean((test$HTOTVAL - predict(citree,newdata = test))^2)
+    
+  mse
+}
+
+# set potential alpha
+set.seed(1234)
+a <-  seq(0.01, 0.1, 0.005)
+cv_result <- data.frame(alpha=a)
+
+# repeat CV for each alpha
+for (i in 1:length(a)) {
+
+ ## 10 folded CV
+cv10 <- vfold_cv(data = df1s,v = 10) %>%
+  mutate(results = pmap(list(splits,a[i]),holdout_results)) %>%
+  unnest(results)
+
+cv_result$mes[i] <- mean(cv10$results)
+}
+
+# optimal alpha
+opt_alpha <- cv_result$alpha[cv_result$mes==min(cv_result$mes)]
+opt_alpha
+```
+
+
+
+
+
+

@@ -1,0 +1,224 @@
+---
+title: "age_tree"
+author: "Takahiro Minami"
+date: "2/25/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+```{r setup, include=FALSE}
+library(gridExtra)
+library(broom)
+library(modelr)
+library(car)
+library(knitr)
+library(MASS)
+library(foreign)
+library(ISLR)
+library(rsample)
+library(yardstick)
+library(tree)
+library(e1071)
+library(class) # for kNN
+library(arm) # for a few base features
+library(partykit)
+library(reldist) # gini coefficient
+library(skimr)
+library(tidyverse)
+options(width=70, digits=4, scipen=8)
+```
+
+
+##Loading Data
+```{r}
+df1 <- read.csv("MLData_Clean.csv")
+```
+
+```{r} 
+##Variables: 
+#HTOTVAL: household income
+#H_TENURE
+#A_SEX: 1 = Male, 2 = Female
+#A_AGE
+#PRCITSHP: 1 = Native, born in US; 2 = Native, born in PR or US outlying area / Native, born abroad of US parent(s) / Foreign born, US cit by naturalization; 3 = Foreign born, not a US citizen
+#PRDTRACE: 1 = White only; 2 = Black only; 3 = American Indian, Alaskan Native only (AI); 4 = Others
+#PEHSPNON: Are you Spanish, Hispanic, or Latino?  1 = Yes 2 = No
+#PENATVTY: Place of Birth 1 = U.S., 2 = Outside of U.S. 
+#PEFNTVTY: Father's Place of Birth 1 = U.S., 2 = Outside of U.S. 
+#PEMNTVTY: Mother's Place of Birth 1 = U.S., 2 = Outside of U.S. 
+#A_MJOCC: Major Occupation Code 0-11, Merge 6 and 11 to 0 
+#A_MJIND: Major Industry Code 0-14, merge 14 to 0, merge 7 to 12, merge 1 and 2
+#GESTFIPS
+#state
+#state_full
+```
+
+
+## We need factorize variables
+```{r}
+# clean data
+df1[sapply(df1, is.integer)] <- lapply(df1[sapply(df1, is.integer)], as.factor)
+df1$HTOTVAL <- as.integer(df1$HTOTVAL)/1000
+df1$A_AGE <- as.integer(df1$A_AGE)
+df1 <- select(df1,-c(X,state,state_full,GESTFIPS))
+head(df1)
+```
+
+## Generate age groups. 
+
+### Group 1: 18-24
+### Group 2: 25-34
+### Group 3: 35-44
+### Group 4: 45-54
+### Group 5: 55-64
+```{r}
+# generate age flag
+df1$AGE_flag[df1$A_AGE>=18 & df1$A_AGE<25]<-1
+df1$AGE_flag[df1$A_AGE>=25 & df1$A_AGE<35]<-2
+df1$AGE_flag[df1$A_AGE>=35 & df1$A_AGE<45]<-3
+df1$AGE_flag[df1$A_AGE>=45 & df1$A_AGE<55]<-4
+df1$AGE_flag[df1$A_AGE>=55 & df1$A_AGE<65]<-5
+df1$AGE_flag[is.na(df1$AGE_flag)]<-0
+```
+
+```{r}
+age_list <- vector(mode = "list", length = 5)
+for (i in 1:5) {
+    age_list[[i]] <- df1 %>% filter(AGE_flag == i) %>% select(-c(A_AGE,AGE_flag))
+}
+```
+
+## Summary of each age groups
+```{r}
+df1 %>% filter(AGE_flag>0) %>% group_by(AGE_flag) %>%
+  summarise(n=n(),
+            one_quarter_income=quantile(HTOTVAL,0.25),
+            median_income=quantile(HTOTVAL,0.5),
+            three_quarter_income=quantile(HTOTVAL,0.75))%>%
+  kable()
+```
+
+## Generate Training and Testing Set List. We assign 75 % of sample to Training.
+```{r}
+train_length <- 5
+test_length <- 5
+train_list <- vector(mode = "list", length = 5)
+test_list <- vector(mode = "list", length = 5)
+set.seed(100)
+for (i in 1:train_length) {
+  train_list[[i]]=sample(1:nrow(age_list[[i]]),
+                        nrow(age_list[[i]])*0.75)
+  
+  test_list[[i]]=
+    c(1:nrow(age_list[[i]]))[!(c(1:nrow(age_list[[i]])) %in% train_list[[i]])]
+}
+```
+
+
+## Conduct CV to set optimal alpha. We search among potential alpha from 0.01 to 0.1.
+```{r}
+# Develop function for CV (get MSE)
+
+holdout_results <- function(splits,alpha) {
+  # Fit the model to the training set
+  mod <- ctree(HTOTVAL ~ .,
+                data=analysis(splits),
+                control = ctree_control(alpha=alpha,
+                                        testtype="Bonferroni"))
+  # Get MSE based on test set
+  test <- assessment(splits)
+  mse <- 
+    mean((test$HTOTVAL - predict(mod,newdata = test))^2)
+    
+  mse
+}
+
+# function fot set potential alpha
+a <-  seq(0.01, 0.1, 0.005)
+cv_alpha <- function(df_train){
+
+cv_result <- data.frame(alpha=a)
+
+# repeat CV for each alpha
+for (i in 1:length(a)) {
+
+ ## 10 folded CV
+cv10 <- vfold_cv(data = df_train,v = 10) %>%
+  mutate(results = pmap(list(splits,a[i]),holdout_results)) %>%
+  unnest(results)
+
+cv_result$mes[i] <- mean(cv10$results)
+}
+
+# optimal alpha
+opt_alpha <- cv_result$alpha[cv_result$mes==min(cv_result$mes)]
+opt_alpha
+}
+```
+
+
+```{r}
+# CV for all age group
+set.seed(1234)
+opt_alpha <- data.frame(age_group=c(1:5))
+
+for (i in 1:train_length) {
+  
+  train <- train_list[[i]]
+  opt_alpha$alpha[i] <- cv_alpha(age_list[[i]][train, ])
+}
+
+```
+
+
+
+## Using optimal alpha, Draw Tree of each age group
+```{r}
+tree_list <- vector(mode = "list", length = 5)
+for (i in 1:length(tree_list)) {
+ train <- train_list[[i]]
+ citree <- ctree(HTOTVAL ~ .,
+                data=age_list[[i]][train, ],
+                control = ctree_control(alpha=opt_alpha$alpha[i],
+                                        testtype="Bonferroni"))
+ tree_list[[i]] <- citree
+}
+```
+
+
+## Graph
+```{r, fig.width=50, fig.height=20}
+plot(tree_list[[1]]) 
+plot(tree_list[[2]])
+plot(tree_list[[3]])
+plot(tree_list[[4]])
+plot(tree_list[[5]])
+```
+
+
+## MES and Opportunity based Gini coefficient of 5 age groups
+```{r}
+# mse
+mse <- c()
+for (i in 1:5) {
+  test <- test_list[[i]]
+  mse[i] <- mean((age_list[[i]][test, ]$HTOTVAL-
+                    predict(tree_list[[i]],
+                            newdata = age_list[[i]][test, ]))^2)
+}
+
+
+
+
+
+# opportunity based gini coefficient
+gini_opp <- seq(from=1, to=5, by=1)
+for (i in 1:5) {
+  gini_opp[i] <- gini(predict(tree_list[[i]],newdata = age_list[[i]]))
+}
+```
+

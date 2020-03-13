@@ -1,0 +1,668 @@
+---
+title: "Appendix"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r package, message=FALSE}
+library(knitr)
+library(kableExtra)
+library(gridExtra)
+library(tree)
+library(rsample)
+library(party)
+library(reldist)
+library(skimr)
+library(tidyverse)
+```
+
+# Data Cleaning
+## Import Dataset
+```{r import data}
+# Household data
+hh <- read.csv("hhpub19.csv", header=T)
+
+# Person data
+pp <- read.csv("pppub19.csv", header=T)
+
+# state db
+fips = read.csv("fipscodes.csv", header = T)
+```
+
+
+## Add State names to Household database
+```{r add state names}
+# matching state name and fips code
+hh <- left_join(hh,fips,by="GESTFIPS")
+head(hh$GESTFIPS)
+head(hh$state_full)
+```
+
+## Matching household and people database by Household ID (H_SEQ and PH_SEQ) 
+
+```{r matching hh and pp}
+# matching key between person data and household
+#PH_SEQ is the sequence number of family record in household
+match_hh_per <- unique(pp$PH_SEQ)
+
+# hh database we use
+new_hh <- hh %>%  filter(H_SEQ %in% match_hh_per)
+
+# pp database we use
+# we use only householders
+new_pp <- pp %>% filter(HHDREL==1)
+
+# match hh and pp
+df <- inner_join(new_hh, new_pp, by=c("H_SEQ" = "PH_SEQ"))
+```
+
+
+## Select all variables we use
+```{r variable list} 
+##Variables: 
+#HTOTVAL: household income
+#A_SEX: 1 = Male, 2 = Female
+#A_AGE
+#PRCITSHP: 1 = Native, born in US; 
+          #2 = Native, born in PR or US outlying area 
+               #/ Native, born abroad of US parent(s) 
+               #/ Foreign born, US cit by naturalization;
+          #3 = Foreign born, not a US citizen
+#PRDTRACE: 1 = White only; 2 = Black only; 3 = Others
+#PEHSPNON: Are you Spanish, Hispanic, or Latino?  1 = Yes 2 = No
+#PENATVTY: Place of Birth 1 = U.S., 2 = Outside of U.S. 
+#PEFNTVTY: Father's Place of Birth 1 = U.S., 2 = Outside of U.S. 
+#PEMNTVTY: Mother's Place of Birth 1 = U.S., 2 = Outside of U.S. 
+#GESTFIPS
+#state
+#state_full
+
+df1 <- dplyr::select (df, 
+                      HTOTVAL, A_SEX, A_AGE, PRCITSHP, PRDTRACE, PEHSPNON,
+                      PENATVTY, PEFNTVTY, PEMNTVTY, GESTFIPS, state, state_full)
+```
+
+
+## Data Cleaning
+```{r cleaning data 1}
+#There is no NA data in this dataset.
+
+#PRCITSHP:
+for (i in 1:length(df1$PRCITSHP)) {
+    if (df1$PRCITSHP[i] == 3 | df1$PRCITSHP[i] == 4){
+      df1$PRCITSHP[i] = 2
+    } 
+    else if (new_pp$PRCITSHP[i] == 5){
+      df1$PRCITSHP[i] = 3
+    }
+}
+
+#PRDTRACE: 
+for (i in 1:length(df1$PRDTRACE)) {
+    if(!(df1$PRDTRACE[i] == 1 | df1$PRDTRACE[i] == 2)) {
+      df1$PRDTRACE[i] = 3
+    }
+}
+
+#PENATVTY: Place of Birth 1 = U.S., 2 = Outside of U.S.
+df1$PENATVTY <- ifelse(df1$PENATVTY == 57, 1, 2)
+
+##PEFNTVTY: Father's Place of Birth 1 = U.S., 2 = Outside of U.S.
+df1$PEFNTVTY <- ifelse(df1$PEFNTVTY == 57, 1, 2)
+
+#PEMNTVTY: Mother's Place of Birth 1 = U.S., 2 = Outside of U.S.
+df1$PEMNTVTY <- ifelse(df1$PEMNTVTY == 57, 1, 2)
+```
+
+```{r cleaning data 2}
+colnames(df1) <- c("HHincome","Sex","A_Age", "Citizenship","Race","Hispanic",
+                   "Place_of_Birth","F's_Place_of_Birth","M's_Place_of_Birth",
+                   "GESTFIPS","state","state_full")
+df1$HHincome <- as.integer(df1$HHincome)/1000
+df1$Sex <- as.factor(ifelse(df1$Sex==1,"Male","Female"))
+df1$Citizenship <- as.factor(ifelse(df1$Citizenship==1,"citizen",
+                   ifelse(df1$Citizenship==2,"citizen born outside","non-citizen")))
+df1$Race <- as.factor(ifelse(df1$Race==1, "White",
+            ifelse(df1$Race==2,"Black","Other")))
+df1$Hispanic <- as.factor(ifelse(df1$Hispanic==1,"Yes","No"))
+df1$Place_of_Birth <- as.factor(ifelse(df1$Place_of_Birth==1,"US","non-US"))
+df1$`F's_Place_of_Birth` <- as.factor(ifelse(df1$`F's_Place_of_Birth`==1,"US","non-US"))
+df1$`M's_Place_of_Birth` <- as.factor(ifelse(df1$`M's_Place_of_Birth`==1,"US","non-US"))
+head(df1)
+```
+
+
+# Summary Statistics
+```{r summary statistics state}
+sum_table.whole <- df1 %>%
+  summarize(state="Whole",
+            n=n(),
+            ave.income=round(mean(HHincome),1),
+            `25%tile`=round(quantile(HHincome,0.25),1),
+            `75%tile`=round(quantile(HHincome,0.75),1),
+            `s.d.`=round(sd(HHincome),1),
+            `Gini`=round(gini(HHincome),3),
+            `White ratio`=round(mean(I(Race=="White"))*100,1),
+            `Male ratio`=round(mean(I(Sex=="Male"))*100,1),
+            `Hispanic ratio`=round(mean(I(Hispanic=="Yes"))*100,1))
+
+sum_table.state <- df1 %>%
+  group_by(state)%>%
+  summarise(n=n(),
+            ave.income=round(mean(HHincome),1),
+            `25%tile`=round(quantile(HHincome,0.25),1),
+            `75%tile`=round(quantile(HHincome,0.75),1),
+            `s.d.`=round(sd(HHincome),1),
+            `Gini`=round(gini(HHincome),3),
+            `White ratio`=round(mean(I(Race=="White"))*100,1),
+            `Male ratio`=round(mean(I(Sex=="Male"))*100,1),
+            `Hispanic ratio`=round(mean(I(Hispanic=="Yes"))*100,1))
+
+sum_table <- as.data.frame(rbind(sum_table.whole,sum_table.state))
+sum_table$n <- formatC(sum_table$n, format="d", big.mark=',')
+kable(sum_table, align=rep('c', 10),booktabs = T) 
+colnames(sum_table)
+write.csv(sum_table,"sum_table.csv")
+```
+
+
+
+# Tree for the whole US
+```{r data for whole us}
+df1.whole <- df1 %>%
+  select(HHincome,Sex,Citizenship,Race,Hispanic,
+         Place_of_Birth,`F's_Place_of_Birth`,`M's_Place_of_Birth`)
+head(df1.whole)
+```
+
+## Split the df into training and test set
+```{r whole training and test set}
+# split the df into training and test set
+set.seed(12345)
+train <- sample(c(1:nrow(df1.whole)),nrow(df1.whole)*0.75,replace = FALSE) 
+test <- c(1:nrow(df1.whole))[!(c(1:nrow(df1.whole)) %in% train)]
+df_train <- df1.whole[train,]
+df_test <- df1.whole[test,]
+```
+
+
+## Cross validation for deciding alpha. We search among potential alpha from 0.01 to 0.1.
+```{r whole CV}
+# Develop function for CV (get MSE)
+
+holdout_results <- function(splits,alpha) {
+  # Fit the model to the training set
+  
+  mod <- ctree(HHincome ~ .,
+                data=analysis(splits),
+                control = ctree_control(mincriterion=1-alpha,
+                                        testtype="Bonferroni"))
+  # Get MSE based on test set
+  test <- assessment(splits)
+  mse <- 
+    mean((test$HHincome - predict(mod,newdata = test))^2)
+    
+  mse
+}
+
+# set potential alpha
+set.seed(23456)
+a <-  seq(0.01, 0.1, 0.005)
+cv_result <- data.frame(alpha=a)
+
+# repeat CV for each alpha
+for (i in 1:length(a)) {
+
+ ## 10 folded CV
+cv10 <- vfold_cv(data = df_train,v = 10) %>%
+  mutate(results = pmap(list(splits,a[i]),holdout_results)) %>%
+  unnest(results)
+
+cv_result$mse[i] <- mean(cv10$results)
+}
+
+# optimal alpha
+opt_alpha <- cv_result$alpha[cv_result$mse==min(cv_result$mse)]
+opt_alpha
+```
+
+
+## Draw tree
+```{r whole estimate tree}
+# Baseline case
+citree <- ctree(HHincome ~ .,
+                data=df_train,
+                control = ctree_control(mincriterion=1-opt_alpha,
+                                        testtype="Bonferroni"))
+
+```
+
+```{r whole plot, fig.width=20, fig.height=10}
+# Plot
+plot(citree, type="simple")
+```
+
+
+## MSE and Opportunity based Gini coefficient
+```{r whole MSE}
+# mse
+mse <- mean((df_test$HHincome - predict(citree,newdata = df_test))^2)
+mse
+```
+
+```{r whole opportunity based gini coefficient}
+# opportunity based gini coefficient
+gini_opp <- gini(predict(citree,newdata = df1.whole))
+gini <- gini(df1.whole$HHincome)
+kable(data.frame(gini.opp=gini_opp,gini=gini))
+```
+
+
+## Robustness check
+## Conditional Inference Random Forest
+
+```{r Conditional Inference Random Forest}
+ciforest <- 
+  partykit::cforest(HHincome ~ .,
+          data=df_train,
+	        control = partykit::ctree_control(alpha=opt_alpha,
+                                  testtype="Bonferroni"))
+```
+
+```{r Conditional Inference Random Forest MSE}
+#mse
+memory.limit(size=10000) 
+mse_forest <- mean((df_test$HHincome - 
+                      predict(ciforest,newdata = df_test,type = "response"))^2) 
+kable(data.frame(mse.tree=mse,mse.forest=mse_forest))
+```
+
+
+# State-level Analysis
+```{r data for state level}
+df1.state <- df1 %>%
+  select(HHincome,Sex,Citizenship,Race,Hispanic,Place_of_Birth,
+         `F's_Place_of_Birth`,`M's_Place_of_Birth`,state)
+head(df1.state)
+```
+
+## Split the df into training and test set for each state
+```{r state training and test set}
+# Generate subsample for each state
+state_list <- vector(mode = "list", length = 51)
+state_name <- unique(df1.state$state)
+for (i in 1:51) {
+    state_list[[i]] <- 
+      df1.state %>% filter(state == state_name[i]) %>%
+      dplyr::select(-state)
+}
+
+
+# Split the df into training and test set for each state
+train_length <- 51
+test_length <- 51
+train_list <- vector(mode = "list", length = 51)
+test_list <- vector(mode = "list", length = 51)
+
+set.seed(3000)
+for (i in 1:train_length) {
+  train_list[[i]]=sample(1:nrow(state_list[[i]]),
+                        nrow(state_list[[i]])*0.75)
+  
+  test_list[[i]]=
+    c(1:nrow(state_list[[i]]))[!(c(1:nrow(state_list[[i]])) %in% train_list[[i]])]
+}
+```
+
+## Cross validation for deciding alpha for each state
+```{r state CV}
+# function fot set potential alpha
+a <-  seq(0.01, 0.1, 0.005)
+
+cv_alpha <- function(df_train){
+ cv_result <- data.frame(alpha=a)
+ 
+ ## repeat CV for each alpha
+ for (i in 1:length(a)) {
+ ## 10 folded CV
+ cv10 <- vfold_cv(data = df_train,v = 10) %>%
+  mutate(results = pmap(list(splits,a[i]),holdout_results)) %>%
+  unnest(results)
+ cv_result$mse[i] <- mean(cv10$results)
+ }
+ 
+# optimal alpha
+opt_alpha.state <- cv_result$alpha[cv_result$mse==min(cv_result$mse)]
+opt_alpha.state
+}
+
+# CV for all states
+set.seed(1234)
+opt_alpha.state <- data.frame(state_group=c(1:51),state=state_name)
+for (i in 1:train_length) {
+  
+  train <- train_list[[i]]
+  opt_alpha.state$alpha[i] <- cv_alpha(state_list[[i]][train, ])
+}
+```
+
+## Using optimal alpha, estimate Tree of each state
+```{r state estimate tree training set}
+# using only training set
+tree_list.train <- vector(mode = "list", length = 51)
+for (i in 1:length(tree_list.train)) {
+ 
+ train <- train_list[[i]]
+ citree <- ctree(HHincome ~ .,
+                data=state_list[[i]][train,],
+                control = 
+                  ctree_control(mincriterion=1-opt_alpha.state$alpha[i],
+                                testtype="Bonferroni"))
+ 
+ tree_list.train[[i]] <- citree
+}
+```
+
+
+```{r state estimate tree whole sample}
+# use whole sample
+tree_list <- vector(mode = "list", length = 51)
+for (i in 1:length(tree_list)) {
+ 
+ citree <- ctree(HHincome ~ .,
+                data=state_list[[i]],
+                control = 
+                  ctree_control(mincriterion=1-opt_alpha.state$alpha[i],
+                                testtype="Bonferroni"))
+ 
+ tree_list[[i]] <- citree
+}
+```
+
+## Draw Trees for sample states
+```{r state draw tree, fig.width=10, fig.height=6}
+plot(tree_list[[31]],type="simple") #KY
+plot(tree_list[[7]],type="simple") #NY
+plot(tree_list[[49]],type="simple") #CA
+plot(tree_list[[45]],type="simple") #UT
+plot(tree_list[[9]],type="simple") #PA
+plot(tree_list[[34]],type="simple") #MS
+plot(tree_list[[38]],type="simple") #TX
+plot(tree_list[[29]],type="simple") #GA
+plot(tree_list[[33]],type="simple") #AL
+plot(tree_list[[4]],type="simple") #MA
+plot(tree_list[[24]],type="simple") #DC
+plot(tree_list[[12]],type="simple") #IL
+plot(tree_list[[14]],type="simple") #WI
+plot(tree_list[[47]],type="simple") #WA
+plot(tree_list[[10]],type="simple") #OH
+plot(tree_list[[8]],type="simple") #NJ
+plot(tree_list[[44]],type="simple") #AZ
+```
+
+## MSE and Opportunity based Gini coefficient of each state
+```{r state MSE}
+# mse
+mse.state <- c()
+for (i in 1:51) {
+  test <- test_list[[i]]
+  mse.state[i] <- mean((state_list[[i]][test, ]$HHincome-
+                    predict(tree_list.train[[i]],
+                            newdata = state_list[[i]][test, ]))^2)
+}
+```
+
+##Boosting and Bagging
+```{r}
+#Boosting
+library(gbm)
+set.seed(500)
+boost_list.train <- vector(mode = "list", length = 51)
+mse.boost <- rep(NA, 51)
+for (i in 1:length(boost_list.train)) {
+ 
+ train <- train_list[[i]]
+ test <- test_list[[i]]
+ boost.state <- gbm(HHincome ~ ., 
+                    data=state_list[[i]][train,],
+                    distribution="gaussian",
+                    n.trees=1000,
+                    shrinkage=opt_alpha.state$alpha[i],
+                    interaction.depth = 4)
+ boost_list.train[[i]] <- boost.state
+ test.pred <- predict(boost.state, newdata=state_list[[i]][test,], n.trees=1000)
+ mse.boost[i] <- mean((state_list[[i]][test,]$HHincome - test.pred)^2)
+}
+
+state <- data.frame(mse = mse.state)
+boost <- data.frame(mse = mse.boost)
+
+state$color <- 'state'
+boost$color <- 'boost'
+
+compare <- rbind(state, boost)
+
+ggplot(compare, aes(mse, fill = color)) + geom_density(alpha = 0.2)
+
+```
+
+
+```{r state opportunity based gini coefficient}
+# opportunity based gini coefficient
+gini_opp.state <- c()
+for (i in 1:51) {
+  gini_opp.state[i] <- gini(predict(tree_list[[i]],newdata = state_list[[i]]))
+}
+# normal gini-coefficient
+gini.state <- c()
+for (i in 1:51) {
+  gini.state[i] <- gini(state_list[[i]]$HHincome)
+}
+```
+
+```{r gini summary state}
+gini.my <- data.frame(state=state_name,
+                      my.gini=round(gini.state,3),
+                      my.gini.opp=round(gini_opp.state,3),
+                      mse=round(mse.state,0),
+                      opt_alpha=as.numeric(opt_alpha.state$alpha))
+gini.official <- fips %>% select(state,gini)
+
+gini.comp <- left_join(gini.my,gini.official,by="state")
+kable(gini.comp,booktabs = T)
+```
+
+
+## State Mapping (opp base)
+```{r State Mapping opp base}
+library(usmap)
+df.gini.opp <- data.frame(state=state_name, 
+                      gini_opp=gini_opp.state)
+df.gini.new <- df.gini.opp[order(-gini_opp.state),]
+df.gini.new$order = c(1:51)
+plot_usmap(data=df.gini.new, values="gini_opp", color='black', 
+           labels = state_name,include=state_name)+
+  scale_fill_continuous(
+    low='white', high='red', name="opportunity base gini-coefficients")+
+  theme(legend.position = 'right')
+```
+
+## Mapping (original base)
+```{r State Mapping over all}
+library(usmap)
+df.gini <- data.frame(state=state_name, 
+                      gini=gini.state)
+plot_usmap(data=df.gini, values="gini", color='black',
+           labels=state_name,include=state_name)+
+  scale_fill_continuous(
+    low='white', high='red', name="original gini-coefficients")+
+  theme(legend.position = 'right')
+```
+
+## Mapping (official base)
+```{r official gini}
+library(usmap)
+df.gini <- data.frame(state=state_name, 
+                      gini=as.numeric(gini.comp$gini))
+plot_usmap(data=df.gini, values="gini", color='black',
+           labels=state_name,include=state_name)+
+  scale_fill_continuous(
+    low='white', high='red', name="original gini-coefficients")+
+  theme(legend.position = 'right')
+```
+
+
+# Age-level Analysis
+```{r data for age}
+df1.age <- df1 %>%
+  select(HHincome,Sex,Citizenship,Race,Hispanic,Place_of_Birth,
+         `F's_Place_of_Birth`,`M's_Place_of_Birth`,A_Age)
+head(df1.age)
+```
+
+## Generate age sub-group
+```{r age sub-group}
+# generate age flag
+df1.age$AGE_flag[df1.age$A_Age>=18 & df1.age$A_Age<35]<-1
+df1.age$AGE_flag[df1.age$A_Age>=35 & df1.age$A_Age<50]<-2
+df1.age$AGE_flag[df1.age$A_Age>=50 & df1.age$A_Age<65]<-3
+df1.age$AGE_flag[is.na(df1.age$AGE_flag)]<-0
+```
+
+
+## Summary Statistics (age)
+```{r summary statistics age}
+age.category <- c("18-34","35-49","50-64")
+
+sum_table.age <- df1.age %>%
+  group_by(AGE_flag)%>%
+  summarise(sample.size=n(),
+            ave.income=round(mean(HHincome),1),
+            `25%tile`=round(quantile(HHincome,0.25),1),
+            `75%tile`=round(quantile(HHincome,0.75),1),
+            std.dev=round(sd(HHincome),1),
+            Gini=round(gini(HHincome),3),
+            male=round(mean(I(Sex=="Male"))*100,1),
+            white=round(mean(I(Race=="White"))*100,1)) %>%
+  filter(AGE_flag>0) %>%
+  as.data.frame()
+
+
+sum_table.age[,1] <- age.category
+
+kable(sum_table.age, booktabs = T)
+```
+
+
+## Split the df into training and test set for each age group
+```{r age training and test set}
+# generate age sub-group dataset
+age_list <- vector(mode = "list", length = 3)
+for (i in 1:3) {
+    age_list[[i]] <- df1.age %>% filter(AGE_flag == i) %>% select(-c(A_Age,AGE_flag))
+}
+
+# Generate Training and Testing Set List. We assign 75 % of sample to Training.
+train_length.age <- 3
+test_length.age <- 3
+train_list.age <- vector(mode = "list", length = 3)
+test_list.age <- vector(mode = "list", length = 3)
+set.seed(5000)
+for (i in 1:train_length.age) {
+  train_list.age[[i]]=sample(1:nrow(age_list[[i]]),
+                        nrow(age_list[[i]])*0.75)
+  
+  test_list.age[[i]]=
+    c(1:nrow(age_list[[i]]))[!(c(1:nrow(age_list[[i]])) %in% train_list.age[[i]])]
+}
+```
+
+## Conduct CV to set optimal alpha
+```{r age CV}
+# CV for all age group
+set.seed(12345)
+opt_alpha.age <- data.frame(age_group=c(1:3))
+
+for (i in 1:train_length.age) {
+  
+  train <- train_list.age[[i]]
+  opt_alpha.age$alpha[i] <- cv_alpha(age_list[[i]][train, ])
+}
+```
+
+## Using optimal alpha, estimate Tree of each age group
+```{r age estimate tree training set}
+# using only training set
+tree_list.age.train <- vector(mode = "list", length = 3)
+for (i in 1:length(tree_list.age.train)) {
+ 
+ train <- train_list.age[[i]]
+ citree <- ctree(HHincome ~ .,
+                data=age_list[[i]][train,],
+                control = 
+                  ctree_control(mincriterion=1-opt_alpha.age$alpha[i],
+                                testtype="Bonferroni"))
+ 
+ tree_list.age.train[[i]] <- citree
+}
+```
+
+
+```{r age estimate tree whole sample}
+# use whole sample
+tree_list.age <- vector(mode = "list", length = 3)
+for (i in 1:length(tree_list.age)) {
+ train <- train_list.age[[i]]
+ citree <- ctree(HHincome ~ .,
+                data=age_list[[i]],
+                control = ctree_control(mincriterion=1-opt_alpha.age$alpha[i],
+                                        testtype="Bonferroni"))
+ tree_list.age[[i]] <- citree
+}
+```
+
+
+## Draw Tree of each age group
+```{r age group plot, fig.width=13, fig.height=10}
+plot(tree_list.age[[1]],type="simple") 
+plot(tree_list.age[[2]],type="simple")
+plot(tree_list.age[[3]],type="simple") 
+```
+
+## MSE and Opportunity based Gini coefficient for 5 age groups
+```{r age MSE}
+# mse
+mse.age <- c()
+for (i in 1:3) {
+  test <- test_list.age[[i]]
+  mse.age[i] <- mean((age_list[[i]][test, ]$HHincome-
+                    predict(tree_list.age.train[[i]],
+                            newdata = age_list[[i]][test, ]))^2)
+}
+```
+
+
+
+```{r age opportunity based gini coefficient}
+# opportunity based gini coefficient
+gini_opp.age <- c()
+for (i in 1:3) {
+  gini_opp.age[i] <- gini(predict(tree_list.age[[i]],newdata = age_list[[i]]))
+}
+```
+
+
+```{r gini summary age}
+gini.comp.age <- data.frame(age=age.category,
+                      gini=round(as.numeric(sum_table.age$Gini),3),
+                      my.gini.opp=round(gini_opp.age,3),
+                      mse=round(mse.age,0),
+                      opt_alpha=as.numeric(opt_alpha.age$alpha))
+
+kable(gini.comp.age,booktabs = T)
+```
+
+
